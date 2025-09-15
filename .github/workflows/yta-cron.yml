@@ -1,10 +1,10 @@
 name: YouTube Analytics Refresh
 
 on:
-  workflow_dispatch: {}        # shows the button immediately
+  workflow_dispatch: {}        # run manually
   schedule:
-    - cron: '5 7 * * *'        # ~12:05 AM PT during DST
-    - cron: '5 8 * * *'        # ~12:05 AM PT during Standard Time
+    - cron: '5 7 * * *'        # 12:05 AM PT (DST)
+    - cron: '5 8 * * *'        # 12:05 AM PT (Standard Time)
 
 permissions:
   contents: write
@@ -35,10 +35,7 @@ jobs:
           pip install google-api-python-client google-auth-oauthlib google-auth-httplib2 pandas
 
       - name: Run reports
-        run: |
-          # If your script is in a subfolder, cd into it first
-          # cd kepilot-youtube_channel
-          python yta_master_reports.py
+        run: python yta_run_reports.py
 
       - name: Commit and push outputs
         run: |
@@ -47,3 +44,4 @@ jobs:
           git add yta_outputs/*.csv || true
           git commit -m "Automated YTA refresh: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
           git push
+
