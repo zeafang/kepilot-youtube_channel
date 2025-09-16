@@ -13,8 +13,10 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout (full history so we can pull/rebase)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -45,10 +47,30 @@ jobs:
       - name: Run reports
         run: python yta_run_reports.py
 
-      - name: Commit and push outputs
+      - name: Commit and push outputs (pull-rebase first)
         run: |
+          set -e
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add yta_outputs/*.csv || true
-          git commit -m "Automated YTA refresh: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
-          git push
+
+          # Stage changes (do not fail if no files matched)
+          git add yta_outputs/*.csv 2>/dev/null || true
+
+          # Commit if there are staged changes
+          if ! git diff --cached --quiet; then
+            git commit -m "Automated YTA refresh: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          else
+            echo "No changes to commit."
+          fi
+
+          # Pull latest from origin and rebase our commit(s)
+          git config pull.rebase true
+          git pull origin main || true
+
+          # Push (retry once in case of a race)
+          if ! git push origin main; then
+            echo "Push failed once; pulling/rebasing and retrying..."
+            git pull --rebase origin main || true
+            git push origin main
+          fi
+
