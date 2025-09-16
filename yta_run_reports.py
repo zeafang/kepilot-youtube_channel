@@ -10,7 +10,7 @@ import pandas as pd
 
 from youtube_analytics_auth import get_yta_service
 
-# ----- Config -----
+# ===== Config =====
 OUTPUT_DIR = Path("yta_outputs")
 MAX_RESULTS = 200
 PACIFIC_TZ = "America/Los_Angeles"
@@ -51,14 +51,14 @@ REPORTS: Dict[str, Tuple[str, Optional[str], Optional[str], Optional[int], str, 
     ),
 }
 
-# ----- Helpers -----
+# ===== Helpers =====
 def now_pacific_iso() -> str:
     """Current timestamp in America/Los_Angeles (ISO, seconds)."""
     try:
         from zoneinfo import ZoneInfo
         return datetime.now(ZoneInfo(PACIFIC_TZ)).isoformat(timespec="seconds")
     except Exception:
-        # Fallback to naive local time if zoneinfo is unavailable
+        # Fallback if zoneinfo is missing
         return datetime.now().isoformat(timespec="seconds")
 
 def today_pacific_date() -> str:
@@ -98,13 +98,15 @@ def append_or_create_table(df_new: pd.DataFrame, outdir: Path, fname_prefix: str
     outdir.mkdir(parents=True, exist_ok=True)
     canonical = outdir / f"{fname_prefix}.csv"
 
-    # Light typing
     df_new = coerce_types(df_new.copy())
 
     if canonical.exists():
         backup = backup_then_path(canonical, fname_prefix, outdir)
         try:
-            df_old = pd.read_csv(backup if (backup and backup.exists()) else canonical)
+            if backup and backup.exists():
+                df_old = pd.read_csv(backup)
+            else:
+                df_old = pd.DataFrame()
         except Exception:
             df_old = pd.DataFrame()
         df_all = pd.concat([df_old, df_new], ignore_index=True)
@@ -133,16 +135,16 @@ def overwrite_daily_table(df_new: pd.DataFrame, outdir: Path, fname_prefix: str)
 
     df_new = coerce_types(df_new.copy())
     if "day" not in df_new.columns:
-        # Safety: if API changes
         df_new["day"] = pd.NaT
     df_new["updated_at"] = now_pacific_iso()
 
-    # If a previous file exists, read & merge to avoid accidental duplicates, but final behavior is "replace".
     existing = None
+    backup = None
     if canonical.exists():
-        backup_then_path(canonical, fname_prefix, outdir)  # rotate backup
+        backup = backup_then_path(canonical, fname_prefix, outdir)  # rotate backup
         try:
-            existing = pd.read_csv(outdir / f"{fname_prefix}_uptodate_to_{today_pacific_date()}.csv")
+            if backup and backup.exists():
+                existing = pd.read_csv(backup)
         except Exception:
             existing = None
 
@@ -154,7 +156,6 @@ def overwrite_daily_table(df_new: pd.DataFrame, outdir: Path, fname_prefix: str)
         merged.to_csv(canonical, index=False)
         final = merged
     else:
-        # Just write the fresh df
         df_new.drop_duplicates(subset=["day"], keep="last", inplace=True)
         df_new = df_new.sort_values("day")
         df_new.to_csv(canonical, index=False)
@@ -163,7 +164,7 @@ def overwrite_daily_table(df_new: pd.DataFrame, outdir: Path, fname_prefix: str)
     print(f"Rewrote daily trend to {canonical} with {len(final)} rows.")
     return canonical
 
-# ----- API runner -----
+# ===== API runner =====
 def run_report(
     yta,
     start: str,
@@ -203,6 +204,7 @@ def run_report(
             columns = [h["name"] for h in resp.get("columnHeaders", [])]
         all_rows.extend(rows)
 
+        # stop when short page or we've hit explicit cap
         reached_cap = max_results is not None and (start_index - 1) + len(rows) >= max_results
         if len(rows) < page_size or reached_cap:
             break
@@ -217,7 +219,7 @@ def daterange_defaults(args) -> tuple[str, str]:
     start = end - timedelta(days=30)
     return start.isoformat(), end.isoformat()
 
-# ----- Main -----
+# ===== Main =====
 def main():
     parser = argparse.ArgumentParser(description="YouTube Analytics: day, country, traffic sources, top videos")
     parser.add_argument("--start", help="YYYY-MM-DD")
@@ -247,11 +249,11 @@ def main():
                 max_results=maxres, dimensions=dims, fname_prefix=prefix
             )
 
-            # ---- Aggregated reports ----
+            # Aggregated reports: add from/to and upsert
             if k in {"country", "top_videos", "traffic_sources"}:
                 df = df.copy()
 
-                # Earliest record time from the API if a 'day' column exists; else fall back to requested start.
+                # Earliest record time if 'day' present; else fall back to requested start
                 earliest = None
                 if "day" in df.columns:
                     parsed_day = pd.to_datetime(df["day"], errors="coerce")
@@ -260,11 +262,9 @@ def main():
                 if earliest is None:
                     earliest = pd.to_datetime(start, errors="coerce")
 
-                # Use Pacific "now" for to_date_time
                 df["from_date_time"] = pd.Timestamp(earliest).isoformat()
                 df["to_date_time"] = now_pacific_iso()
 
-                # Natural keys per report
                 if k == "country":
                     key_cols = ["country", "from_date_time", "to_date_time"]
                 elif k == "top_videos":
@@ -274,12 +274,12 @@ def main():
 
                 append_or_create_table(df, OUTPUT_DIR, prefix, key_cols)
 
-            # ---- Daily trend ----
+            # Daily trend: add updated_at and replace
             else:  # k == "day"
                 overwrite_daily_table(df, OUTPUT_DIR, prefix)
 
         except Exception as e:
-            # Keep pipelines stable with an empty schema-aligned write
+            # Schema-aligned empty write to keep pipelines stable
             empty_cols = {
                 "country": ["country", "from_date_time", "to_date_time"],
                 "top_videos": ["video", "from_date_time", "to_date_time"],
@@ -298,5 +298,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
