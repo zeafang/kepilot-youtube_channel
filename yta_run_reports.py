@@ -291,5 +291,12 @@ def main():
             if k == "day":
                 overwrite_daily_table(df_empty, OUTPUT_DIR, prefix)
             else:
-                append_or_create_table(df_e
+                append_or_create_table(df_empty, OUTPUT_DIR, prefix, empty_cols or [])
+            print(f"[error] {k}: {e}")
+
+    print("✅ Done.")
+
+if __name__ == "__main__":
+    main()
+
 
