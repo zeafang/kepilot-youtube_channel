@@ -5,7 +5,6 @@ import argparse
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, Tuple, Optional, List
-import shutil
 import pandas as pd
 
 from youtube_analytics_auth import get_yta_service
@@ -61,14 +60,6 @@ def now_pacific_iso() -> str:
         # Fallback if zoneinfo is missing
         return datetime.now().isoformat(timespec="seconds")
 
-def today_pacific_date() -> str:
-    """Today's date in America/Los_Angeles (YYYY-MM-DD)."""
-    try:
-        from zoneinfo import ZoneInfo
-        return datetime.now(ZoneInfo(PACIFIC_TZ)).date().isoformat()
-    except Exception:
-        return date.today().isoformat()
-
 def coerce_types(df: pd.DataFrame) -> pd.DataFrame:
     """Light typing for convenience."""
     if "day" in df.columns:
@@ -78,22 +69,10 @@ def coerce_types(df: pd.DataFrame) -> pd.DataFrame:
             df[c] = pd.to_numeric(df[c], errors="ignore")
     return df
 
-def backup_then_path(canonical: Path, fname_prefix: str, outdir: Path) -> Optional[Path]:
-    """If canonical exists, rename to *_uptodate_to_YYYY-MM-DD.csv (Pacific). Return backup path or None."""
-    if canonical.exists():
-        backup = outdir / f"{fname_prefix}_uptodate_to_{today_pacific_date()}.csv"
-        try:
-            shutil.move(str(canonical), str(backup))
-            return backup
-        except Exception:
-            return None
-    return None
-
 def append_or_create_table(df_new: pd.DataFrame, outdir: Path, fname_prefix: str, key_cols: List[str]) -> Path:
     """
-    Append df_new into canonical table CSV (prefix.csv). If a canonical exists,
-    rename it to *_uptodate_to_YYYY-MM-DD.csv (Pacific) as a backup first,
-    then merge+dedupe by key and write the canonical.
+    Upsert df_new into canonical CSV (prefix.csv), merging with existing contents if present,
+    de-duplicating by key_cols, and writing back to the SAME file (no backups).
     """
     outdir.mkdir(parents=True, exist_ok=True)
     canonical = outdir / f"{fname_prefix}.csv"
@@ -101,21 +80,17 @@ def append_or_create_table(df_new: pd.DataFrame, outdir: Path, fname_prefix: str
     df_new = coerce_types(df_new.copy())
 
     if canonical.exists():
-        backup = backup_then_path(canonical, fname_prefix, outdir)
         try:
-            if backup and backup.exists():
-                df_old = pd.read_csv(backup)
-            else:
-                df_old = pd.DataFrame()
+            df_old = pd.read_csv(canonical)
         except Exception:
             df_old = pd.DataFrame()
         df_all = pd.concat([df_old, df_new], ignore_index=True)
-        if key_cols:
-            df_all.drop_duplicates(subset=key_cols, keep="last", inplace=True)
     else:
         df_all = df_new
 
-    # Sort for readability
+    if key_cols:
+        df_all.drop_duplicates(subset=key_cols, keep="last", inplace=True)
+
     if "day" in df_all.columns:
         df_all = df_all.sort_values("day")
     elif "views" in df_all.columns:
@@ -127,8 +102,8 @@ def append_or_create_table(df_new: pd.DataFrame, outdir: Path, fname_prefix: str
 
 def overwrite_daily_table(df_new: pd.DataFrame, outdir: Path, fname_prefix: str) -> Path:
     """
-    For the daily trend: add updated_at (Pacific), de-dupe by day, then
-    replace the canonical file. Keep a dated backup first.
+    For the daily trend: add updated_at (Pacific), merge with existing if present to preserve past days,
+    de-duplicate by day, then write back to the SAME canonical file (no backups).
     """
     outdir.mkdir(parents=True, exist_ok=True)
     canonical = outdir / f"{fname_prefix}.csv"
@@ -138,30 +113,21 @@ def overwrite_daily_table(df_new: pd.DataFrame, outdir: Path, fname_prefix: str)
         df_new["day"] = pd.NaT
     df_new["updated_at"] = now_pacific_iso()
 
-    existing = None
-    backup = None
     if canonical.exists():
-        backup = backup_then_path(canonical, fname_prefix, outdir)  # rotate backup
         try:
-            if backup and backup.exists():
-                existing = pd.read_csv(backup)
+            existing = pd.read_csv(canonical)
+            existing = coerce_types(existing)
         except Exception:
-            existing = None
-
-    if isinstance(existing, pd.DataFrame) and not existing.empty and "day" in existing.columns:
-        existing = coerce_types(existing)
+            existing = pd.DataFrame()
         merged = pd.concat([existing, df_new], ignore_index=True)
-        merged.drop_duplicates(subset=["day"], keep="last", inplace=True)
-        merged = merged.sort_values("day")
-        merged.to_csv(canonical, index=False)
-        final = merged
     else:
-        df_new.drop_duplicates(subset=["day"], keep="last", inplace=True)
-        df_new = df_new.sort_values("day")
-        df_new.to_csv(canonical, index=False)
-        final = df_new
+        merged = df_new
 
-    print(f"Rewrote daily trend to {canonical} with {len(final)} rows.")
+    merged.drop_duplicates(subset=["day"], keep="last", inplace=True)
+    merged = merged.sort_values("day")
+    merged.to_csv(canonical, index=False)
+
+    print(f"Wrote daily trend to {canonical} with {len(merged)} rows.")
     return canonical
 
 # ===== API runner =====
@@ -249,7 +215,7 @@ def main():
                 max_results=maxres, dimensions=dims, fname_prefix=prefix
             )
 
-            # Aggregated reports: add from/to and upsert
+            # Aggregated reports: add from/to and upsert in place
             if k in {"country", "top_videos", "traffic_sources"}:
                 df = df.copy()
 
@@ -274,7 +240,7 @@ def main():
 
                 append_or_create_table(df, OUTPUT_DIR, prefix, key_cols)
 
-            # Daily trend: add updated_at and replace
+            # Daily trend: add updated_at and merge/overwrite in place
             else:  # k == "day"
                 overwrite_daily_table(df, OUTPUT_DIR, prefix)
 
