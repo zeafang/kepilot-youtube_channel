@@ -4,7 +4,11 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 
-SCOPES = ["https://www.googleapis.com/auth/yt-analytics.readonly"]
+SCOPES = [
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+    "https://www.googleapis.com/auth/youtube.readonly",   # <= add this
+]
+
 
 def get_yta_service(client_secret="client_secret_1049838121814-va0b088vak8n1a3jk5m8novntfltivjh.apps.googleusercontent.com.json", token_path="token.json"):
     token_path = Path(token_path)
