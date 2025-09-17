@@ -1,0 +1,6 @@
+country,views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained,subscribersLost,likes,dislikes,comments,shares,from_date_time,to_date_time
+IN,6839,6045,53,36.83,0,0,0,0,0,0,2025-08-16T00:00:00,2025-09-17T11:54:41-07:00
+DE,220,281,76,40.55,0,0,0,0,0,0,2025-08-16T00:00:00,2025-09-17T11:54:41-07:00
+CA,146,255,104,55.47,0,0,0,0,0,0,2025-08-16T00:00:00,2025-09-17T11:54:41-07:00
+US,108,167,92,51.93,0,0,0,0,0,0,2025-08-16T00:00:00,2025-09-17T11:54:41-07:00
+GB,93,117,75,40.08,0,0,0,0,0,0,2025-08-16T00:00:00,2025-09-17T11:54:41-07:00
