@@ -8,7 +8,7 @@ from typing import Dict, Tuple, Optional, List
 
 import pandas as pd
 
-from youtube_analytics_auth import get_yta_service  # Analytics API v2
+from youtube_analytics_auth import get_yta_service  # Analytics API v2 (your existing helper)
 
 # =========================
 # Config
@@ -61,42 +61,22 @@ def now_pacific_iso() -> str:
         return datetime.now().isoformat(timespec="seconds")
 
 
-def upsert_csv(df_new: pd.DataFrame, prefix: str, key_cols: List[str], sort_cols: Optional[List[str]] = None) -> Path:
-    """
-    Append to (or create) OUTPUT_DIR/prefix.csv, then drop duplicates by key_cols keeping the last occurrence.
-    Optionally sort by sort_cols at the end.
-    """
+def save_csv(df: pd.DataFrame, prefix: str, *, append: bool = False) -> Path:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUTPUT_DIR / f"{prefix}.csv"
-
-    # Ensure all key columns exist (create empty if needed)
-    for c in key_cols:
-        if c not in df_new.columns:
-            df_new[c] = pd.NA
-
-    if path.exists():
-        try:
-            df_old = pd.read_csv(path)
-        except Exception:
-            df_old = pd.DataFrame(columns=df_new.columns)
-        # align columns union, then concat
-        common_cols = sorted(set(df_old.columns).union(df_new.columns))
-        df_old = df_old.reindex(columns=common_cols)
-        df_new = df_new.reindex(columns=common_cols)
-        df_all = pd.concat([df_old, df_new], ignore_index=True)
+    if append:
+        path_exists = path.exists()
+        df.to_csv(
+            path,
+            index=False,
+            mode="a" if path_exists else "w",
+            header=not path_exists,
+        )
+        action = "Appended to" if path_exists else "Saved"
     else:
-        df_all = df_new
-
-    # Deduplicate by key columns, keep the newest row (last)
-    if key_cols:
-        df_all.drop_duplicates(subset=key_cols, keep="last", inplace=True)
-
-    # Optional final sort
-    if sort_cols:
-        df_all = df_all.sort_values(sort_cols)
-
-    df_all.to_csv(path, index=False)
-    print(f"Upserted {len(df_new)} rows into {path} (now {len(df_all)} total)")
+        df.to_csv(path, index=False)
+        action = "Saved"
+    print(f"{action} {path} ({len(df)} rows)")
     return path
 
 
@@ -108,6 +88,7 @@ def build_youtube_data_client():
     Build a Data API v3 client using token.json that has BOTH scopes:
     - https://www.googleapis.com/auth/yt-analytics.readonly
     - https://www.googleapis.com/auth/youtube.readonly
+    Returns None if the token/scopes aren’t available; code will fall back.
     """
     try:
         from googleapiclient.discovery import build as build_service
@@ -129,6 +110,7 @@ def build_youtube_data_client():
 
 
 def get_channel_created_date(ytd) -> Optional[date]:
+    """Channel snippet.publishedAt (date) or None."""
     if not ytd:
         return None
     try:
@@ -143,6 +125,7 @@ def get_channel_created_date(ytd) -> Optional[date]:
 
 
 def get_first_video_published_date(ytd) -> Optional[date]:
+    """Earliest upload date (scans uploads playlist; capped to ~1000 items)."""
     if not ytd:
         return None
     try:
@@ -177,6 +160,7 @@ def get_first_video_published_date(ytd) -> Optional[date]:
 
 
 def get_video_publish_map(ytd, video_ids: List[str]) -> Dict[str, date]:
+    """Return {videoId: publishedAt(date)} for the given IDs (batched)."""
     out: Dict[str, date] = {}
     if not ytd or not video_ids:
         return out
@@ -197,6 +181,7 @@ def get_video_publish_map(ytd, video_ids: List[str]) -> Dict[str, date]:
 # Analytics helpers (v2)
 # =========================
 def latest_analytics_date(yta) -> Optional[date]:
+    """Most recent 'day' the Analytics API has published for this channel."""
     try:
         today = date.today()
         resp = yta.reports().query(
@@ -211,7 +196,7 @@ def latest_analytics_date(yta) -> Optional[date]:
         rows = resp.get("rows", []) or []
         if not rows:
             return None
-        return datetime.fromisoformat(rows[-1][0]).date()
+        return datetime.fromisoformat(rows[-1][0]).date()  # 'YYYY-MM-DD'
     except Exception:
         return None
 
@@ -227,6 +212,7 @@ def run_report(
     filters: Optional[str] = None,
     max_results: Optional[int] = None,
 ) -> pd.DataFrame:
+    """Generic Analytics call with pagination."""
     all_rows: List[List] = []
     columns: List[str] = []
     start_index = 1
@@ -253,6 +239,7 @@ def run_report(
             columns = [h["name"] for h in resp.get("columnHeaders", [])]
         all_rows.extend(rows)
 
+        # stop when page short or we've hit explicit cap
         reached_cap = max_results is not None and (start_index - 1) + len(rows) >= max_results
         if len(rows) < page_size or reached_cap:
             break
@@ -265,7 +252,7 @@ def run_report(
 # Main
 # =========================
 def main():
-    parser = argparse.ArgumentParser(description="YouTube Analytics: day, country, traffic sources, top videos (append-only CSVs)")
+    parser = argparse.ArgumentParser(description="YouTube Analytics: day, country, traffic sources, top videos (with Data API dates)")
     parser.add_argument("--start", help="YYYY-MM-DD (optional override for all reports)")
     parser.add_argument("--end", help="YYYY-MM-DD (optional override for all reports)")
     parser.add_argument("--reports", nargs="*", help="Subset: day country traffic_sources top_videos")
@@ -310,16 +297,18 @@ def main():
                 )
 
                 if seed_df.empty or "video" not in seed_df.columns:
+                    # Nothing to refine; still emit with date columns + refresh
                     out = seed_df.copy()
                     out["from_date_time"] = broad_start
                     out["to_date_time"] = last_rec_iso
                     out["refresh_date"] = now_pacific_iso()
-                    upsert_csv(out, prefix, key_cols=["video", "to_date_time"], sort_cols=["video", "to_date_time"])
+                    save_csv(out, prefix, append=True)
                     continue
 
                 vids = seed_df["video"].astype(str).tolist()
                 pub_map = get_video_publish_map(ytd, vids) if ytd else {}
 
+                # Refine: for each video, start at its publish date if known (else fallback)
                 rows: List[pd.DataFrame] = []
                 for vid in vids:
                     vstart_date = pub_map.get(vid, date(2025, 8, 28))
@@ -337,8 +326,8 @@ def main():
                         continue
                     dfv = dfv.copy()
                     dfv["from_date_time"] = vstart_iso
-                    dfv["to_date_time"] = last_rec_iso
-                    dfv["refresh_date"] = now_pacific_iso()
+                    dfv["to_date_time"] = last_rec_iso          # <-- API last recorded date
+                    dfv["refresh_date"] = now_pacific_iso()      # <-- actual run time
                     rows.append(dfv)
 
                 final = pd.concat(rows, ignore_index=True) if rows else seed_df
@@ -348,7 +337,7 @@ def main():
                     final["to_date_time"] = last_rec_iso
                     final["refresh_date"] = now_pacific_iso()
 
-                upsert_csv(final, prefix, key_cols=["video", "to_date_time"], sort_cols=["video", "to_date_time"])
+                save_csv(final, prefix, append=True)
 
             elif key in {"country", "traffic_sources"}:
                 start_iso = start_override or channel_start_iso
@@ -363,15 +352,9 @@ def main():
                 )
                 df = df.copy()
                 df["from_date_time"] = start_iso
-                df["to_date_time"] = last_rec_iso
-                df["refresh_date"] = now_pacific_iso()
-
-                # De-dupe snapshot by dimension + to_date_time (keeps historical snapshots over time)
-                if key == "country":
-                    upsert_csv(df, prefix, key_cols=["country", "to_date_time"], sort_cols=["country", "to_date_time"])
-                else:
-                    upsert_csv(df, prefix, key_cols=["insightTrafficSourceType", "to_date_time"],
-                               sort_cols=["insightTrafficSourceType", "to_date_time"])
+                df["to_date_time"] = last_rec_iso              # <-- API last recorded date
+                df["refresh_date"] = now_pacific_iso()         # <-- actual run time
+                save_csv(df, prefix, append=True)
 
             else:  # day
                 start_iso = start_override or (last_rec_date - timedelta(days=30)).isoformat()
@@ -385,12 +368,11 @@ def main():
                 )
                 df = df.copy()
                 df["refresh_date"] = now_pacific_iso()
-                # Upsert by day so re-runs just refresh the latest day's row
-                upsert_csv(df, prefix, key_cols=["day"], sort_cols=["day"])
+                save_csv(df, prefix)
 
         except Exception as e:
             print(f"[error] {key}: {e}")
-            # Write an empty, schema-aligned rowset (won't break future upserts)
+            # Emit schema-aligned empty CSV so pipelines don't break
             empty_cols = {
                 "country": ["country", "from_date_time", "to_date_time", "refresh_date"],
                 "traffic_sources": ["insightTrafficSourceType", "from_date_time", "to_date_time", "refresh_date"],
@@ -398,12 +380,11 @@ def main():
                 "day": ["day", "refresh_date"],
             }.get(key, [])
             df_empty = pd.DataFrame(columns=empty_cols)
-            upsert_csv(df_empty, prefix, key_cols=empty_cols or [], sort_cols=None)
+            save_csv(df_empty, prefix)
 
     print("✅ Done.")
 
 
 if __name__ == "__main__":
     main()
-
 
