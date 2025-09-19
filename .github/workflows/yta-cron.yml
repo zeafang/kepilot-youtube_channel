@@ -3,7 +3,7 @@ name: YouTube Analytics Refresh
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '5 7 * * *'   # ~12:05 AM PT during Daylight Saving (UTC-7)
+    # - cron: '5 7 * * *'   # ~12:05 AM PT during Daylight Saving (UTC-7)
     - cron: '5 8 * * *'   # ~12:05 AM PT during Standard Time (UTC-8)
 
 permissions:
