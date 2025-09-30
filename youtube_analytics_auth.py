@@ -9,23 +9,40 @@ SCOPES = [
 ]
 
 def _creds_from_env():
-    # Preferred: use the full "authorized user" JSON if provided
-    yta = os.environ.get("YT_TOKEN_JSON", "").strip()
-    if yta:
-        info = json.loads(yta)  # must be a single valid JSON object
-        # Ensure scopes are present (just in case)
+    token_json = os.environ.get("YT_TOKEN_JSON")
+    if token_json:
+        info = json.loads(token_json)
+        info.setdefault("token_uri", "https://oauth2.googleapis.com/token")
         info.setdefault("scopes", SCOPES)
+
+        # Ensure client_id/secret exist. If not, fill from client secret JSON.
+        if not info.get("client_id") or not info.get("client_secret"):
+            client_cfg_raw = os.environ.get("YT_CLIENT_SECRET_JSON")
+            if not client_cfg_raw:
+                raise RuntimeError(
+                    "YT_TOKEN_JSON provided but missing client_id/client_secret, and "
+                    "YT_CLIENT_SECRET_JSON is not set."
+                )
+            cfg = json.loads(client_cfg_raw)
+            block = cfg.get("installed") or cfg.get("web") or {}
+            info["client_id"] = info.get("client_id") or block.get("client_id")
+            info["client_secret"] = info.get("client_secret") or block.get("client_secret")
+
         return Credentials.from_authorized_user_info(info, scopes=SCOPES)
 
-    # Fallback: build from client JSON + refresh token (if you keep a separate refresh token secret)
-    client_cfg = json.loads(os.environ["YT_CLIENT_SECRET_JSON"])
-    refresh_token = os.environ["GOOGLE_REFRESH_TOKEN"]  # only needed for fallback path
-    if "installed" in client_cfg:
-        client_id = client_cfg["installed"]["client_id"]
-        client_secret = client_cfg["installed"]["client_secret"]
-    else:  # sometimes it's "web"
-        client_id = client_cfg["web"]["client_id"]
-        client_secret = client_cfg["web"]["client_secret"]
+    # Fallback path: use client secret JSON + refresh token secret
+    client_cfg_raw = os.environ.get("YT_CLIENT_SECRET_JSON")
+    refresh_token = os.environ.get("GOOGLE_REFRESH_TOKEN")
+    if not client_cfg_raw or not refresh_token:
+        raise RuntimeError(
+            "Missing required env vars. Set either YT_TOKEN_JSON, or both "
+            "YT_CLIENT_SECRET_JSON and GOOGLE_REFRESH_TOKEN."
+        )
+
+    cfg = json.loads(client_cfg_raw)
+    block = cfg.get("installed") or cfg.get("web") or {}
+    client_id = block["client_id"]
+    client_secret = block["client_secret"]
 
     return Credentials(
         token=None,
@@ -43,3 +60,4 @@ def get_yta_service():
 def get_yt_data_api_service():
     creds = _creds_from_env()
     return build("youtube", "v3", credentials=creds, cache_discovery=False)
+
