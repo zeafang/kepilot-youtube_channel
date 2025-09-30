@@ -3,7 +3,7 @@ name: YouTube Analytics Refresh
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '5 8 * * *'   # 08:05 UTC ~ 12:05 AM PT (Standard Time)
+    - cron: "5 8 * * *"   # 08:05 UTC ~ 12:05 AM PT (Standard Time)
 
 permissions:
   contents: write
@@ -20,7 +20,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Ensure repo root is on PYTHONPATH
         run: echo "PYTHONPATH=.:$PYTHONPATH" >> $GITHUB_ENV
@@ -30,32 +30,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install google-api-python-client google-auth-oauthlib google-auth-httplib2 pandas
 
-      # (Optional) Validate that secrets are present and JSON is valid
-      - name: Debug env presence & JSON validity (no secret contents)
-        env:
-          YT_TOKEN_JSON: ${{ secrets.YT_TOKEN_JSON }}
-          YT_CLIENT_SECRET_JSON: ${{ secrets.YT_CLIENT_SECRET_JSON }}
-        run: |
-          python - <<'PY'
-import os, json
-for k in ["YT_TOKEN_JSON","YT_CLIENT_SECRET_JSON"]:
-    v = os.environ.get(k)
-    print(f"{k}: {'SET len='+str(len(v)) if v else 'MISSING'}")
-    if v:
-        json.loads(v)
-        print(f"{k}: JSON ✅")
-print("Env & JSON checks passed.")
-PY
-
       - name: Run reports (30 full days in PT with 2-day lag)
         env:
           TZ: America/Los_Angeles
           YT_TOKEN_JSON: ${{ secrets.YT_TOKEN_JSON }}
           YT_CLIENT_SECRET_JSON: ${{ secrets.YT_CLIENT_SECRET_JSON }}
         run: |
-          END="$(date -d '2 days ago' +%F)"        # PT today - 2
-          START="$(date -d '32 days ago' +%F)"     # last ~30 FULL days
-          echo "Range: $START → $END (America/Los_Angeles)"
+          END="$(date -d '2 days ago' +%F)"
+          START="$(date -d '32 days ago' +%F)"
+          echo "Range: $START -> $END (America/Los_Angeles)"
           python yta_run_reports.py --start "$START" --end "$END"
 
       - name: Commit and push outputs (pull-rebase first)
@@ -63,16 +46,14 @@ PY
           set -e
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
           git add yta_outputs/*.csv 2>/dev/null || true
           git add *.csv 2>/dev/null || true
-
           if ! git diff --cached --quiet; then
             git commit -m "Automated YTA refresh: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           else
             echo "No changes to commit."
           fi
-
           git config pull.rebase true
           git pull origin main || true
           git push origin main || { echo "Push failed once; retrying after rebase..."; git pull --rebase origin main || true; git push origin main; }
+
