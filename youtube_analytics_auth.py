@@ -1,30 +1,27 @@
 # youtube_analytics_auth.py
-from pathlib import Path
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
+import os
 from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 
 SCOPES = [
     "https://www.googleapis.com/auth/yt-analytics.readonly",
-    "https://www.googleapis.com/auth/youtube.readonly",   # <= add this
+    "https://www.googleapis.com/auth/youtube.readonly",
 ]
 
+def _build_creds_from_env():
+    return Credentials(
+        token=None,  # will be fetched via refresh using the refresh_token
+        refresh_token=os.environ["GOOGLE_REFRESH_TOKEN"],
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=os.environ["GOOGLE_CLIENT_ID"],
+        client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
+        scopes=SCOPES,
+    )
 
-def get_yta_service(client_secret="client_secret_1049838121814-va0b088vak8n1a3jk5m8novntfltivjh.apps.googleusercontent.com.json", token_path="token.json"):
-    token_path = Path(token_path)
-    creds = None
-    if token_path.exists():
-        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            from google.auth.transport.requests import Request
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(client_secret, SCOPES)
-            creds = flow.run_local_server(port=0)
-        token_path.write_text(creds.to_json())
-    return build("youtubeAnalytics", "v2", credentials=creds)
+def get_yta_service():
+    creds = _build_creds_from_env()
+    return build("youtubeAnalytics", "v2", credentials=creds, cache_discovery=False)
 
-if __name__ == "__main__":
-    yta = get_yta_service()
-    print("✅ YouTube Analytics service ready!")
+def get_yt_data_api_service():
+    creds = _build_creds_from_env()
+    return build("youtube", "v3", credentials=creds, cache_discovery=False)
