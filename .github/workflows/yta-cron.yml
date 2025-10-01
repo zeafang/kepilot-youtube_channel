@@ -3,8 +3,8 @@ name: YouTube Analytics Refresh
 on:
   workflow_dispatch: {}
   schedule:
-    # - cron: '5 7 * * *'   # ~12:05 AM PT during Daylight Saving (UTC-7)
-    - cron: '5 8 * * *'   # ~12:05 AM PT during Standard Time (UTC-8)
+    # - cron: "5 7 * * *"   # ~12:05 AM PT during Daylight Saving (UTC-7)
+    - cron: "5 8 * * *"     # ~12:05 AM PT during Standard Time (UTC-8)
 
 permissions:
   contents: write
@@ -21,15 +21,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-
-      - name: Restore OAuth files from secrets (to repo root)
-        env:
-          YT_CLIENT_SECRET_JSON: ${{ secrets.YT_CLIENT_SECRET_JSON }}
-          YT_TOKEN_JSON: ${{ secrets.YT_TOKEN_JSON }}
-        run: |
-          printf '%s' "$YT_CLIENT_SECRET_JSON" > client_secret.json
-          printf '%s' "$YT_TOKEN_JSON" > token.json
+          python-version: "3.10"
 
       - name: Ensure repo root is on PYTHONPATH
         run: echo "PYTHONPATH=.:$PYTHONPATH" >> $GITHUB_ENV
@@ -37,15 +29,34 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install google-api-python-client google-auth-oauthlib google-auth-httplib2 pandas
+          pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 pandas
+
+      # Optional: quick sanity check (prints presence/length, not secret contents)
+      - name: Debug secrets presence (no contents)
+        env:
+          YT_CLIENT_SECRET_JSON: ${{ secrets.YT_CLIENT_SECRET_JSON }}
+          YT_TOKEN_JSON: ${{ secrets.YT_TOKEN_JSON }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+        run: |
+          python - <<'PY'
+import os
+for k in ["YT_CLIENT_SECRET_JSON","YT_TOKEN_JSON","GOOGLE_REFRESH_TOKEN"]:
+    v=os.environ.get(k)
+    print(f"{k}: {'MISSING' if not v else 'SET len='+str(len(v))}")
+PY
 
       - name: Run reports (30 full days in PT with 2-day lag)
         env:
           TZ: America/Los_Angeles
+          # REQUIRED: full client secret JSON from Google Cloud
+          YT_CLIENT_SECRET_JSON: ${{ secrets.YT_CLIENT_SECRET_JSON }}
+          # Refresh token string; your code accepts either of these names:
+          YT_TOKEN_JSON: ${{ secrets.YT_TOKEN_JSON }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
         run: |
           END="$(date -d '2 days ago' +%F)"        # PT today - 2
-          START="$(date -d '32 days ago' +%F)"     # ~last 30 FULL days
-          echo "Range: $START → $END (America/Los_Angeles)"
+          START="$(date -d '32 days ago' +%F)"     # last ~30 FULL days
+          echo "Range: $START -> $END (America/Los_Angeles)"
           python yta_run_reports.py --start "$START" --end "$END"
 
       - name: Commit and push outputs (pull-rebase first)
@@ -72,3 +83,4 @@ jobs:
             git pull --rebase origin main || true
             git push origin main
           fi
+
