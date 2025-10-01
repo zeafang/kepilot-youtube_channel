@@ -3,7 +3,7 @@ name: YouTube Analytics Refresh
 on:
   workflow_dispatch:
   schedule:
-    - cron: "5 8 * * *"   # 08:05 UTC (~12:05 AM PT during Standard Time)
+    - cron: "5 8 * * *"   # 08:05 UTC (~12:05 AM PT, Standard Time)
 
 permissions:
   contents: write
@@ -11,6 +11,13 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+
+    # Make the secrets available to all steps
+    env:
+      GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+      GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+      GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+
     steps:
       - name: Checkout (full history so we can pull/rebase)
         uses: actions/checkout@v4
@@ -30,12 +37,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 pandas
 
-      - name: Write token.json from secret
-        env:
-          TOKEN_JSON: ${{ secrets.TOKEN_JSON }}
+      # Optional: confirm secrets are present (prints lengths only)
+      - name: Debug secrets presence (no contents)
         run: |
-          printf '%s' "$TOKEN_JSON" > token.json
-          python -c "import json; json.load(open('token.json')); print('token.json JSON OK')"
+          python - <<'PY'
+import os
+for k in ["GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET","GOOGLE_REFRESH_TOKEN"]:
+    v=os.environ.get(k)
+    print(f"{k}: {'MISSING' if not v else 'SET len='+str(len(v))}")
+PY
 
       - name: Run reports (30 full days in PT with 2-day lag)
         env:
@@ -61,7 +71,5 @@ jobs:
           git config pull.rebase true
           git pull origin main || true
           git push origin main || { echo "Push failed once; retrying after rebase..."; git pull --rebase origin main || true; git push origin main; }
-
-
 
 
